@@ -1,0 +1,21 @@
+# Render Blueprint for the FINN API. In Render: New > Blueprint > pick this repo.
+services:
+  - type: web
+    name: finn-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ENABLE_SCHEDULER        # poll NSE filings every 15 min, prices once after the close
+        value: "true"
+      - key: GEMINI_API_KEY          # set in the Render dashboard; never commit it
+        sync: false
+      - key: CORS_ORIGINS
+        value: http://localhost:3000
+      - key: CORS_ORIGIN_REGEX       # any *.vercel.app frontend
+        value: https://.*\.vercel\.app

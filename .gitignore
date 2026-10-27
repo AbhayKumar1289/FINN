@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.local
+backend/finn.db*
+backend/data/
+node_modules/
+.next/
+*.tsbuildinfo

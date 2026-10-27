@@ -1,0 +1,439 @@
+{
+ "maruti": {
+  "statements": [
+   {
+    "basis": "standalone",
+    "unit": "INR in million",
+    "columns": [
+     {
+      "period_end": "2026-09-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2026-06-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2025-09-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2026-09-30",
+      "period_type": "half_year"
+     },
+     {
+      "period_end": "2025-09-30",
+      "period_type": "half_year"
+     },
+     {
+      "period_end": "2026-03-31",
+      "period_type": "year"
+     }
+    ],
+    "rows": [
+     {
+      "label": "Total revenue from operations",
+      "values": [
+       533402,
+       524551,
+       423323,
+       1057959,
+       809253,
+       1832661
+      ]
+     },
+     {
+      "label": "Other income",
+      "values": [
+       4298,
+       18737,
+       9661,
+       22029,
+       28540,
+       43919
+      ]
+     },
+     {
+      "label": "Total income (I+II)",
+      "values": [
+       537700,
+       543294,
+       432984,
+       1079988,
+       837793,
+       1876580
+      ]
+     },
+     {
+      "label": "Finance costs",
+      "values": [
+       677,
+       635,
+       572,
+       1312,
+       1040,
+       2381
+      ]
+     },
+     {
+      "label": "Depreciation and amortisation expenses",
+      "values": [
+       19596,
+       17800,
+       17028,
+       37396,
+       32585,
+       67405
+      ]
+     },
+     {
+      "label": "Profit before tax (III-IV)",
+      "values": [
+       31658,
+       43413,
+       42909,
+       75071,
+       91969,
+       188629
+      ]
+     },
+     {
+      "label": "Total tax expense",
+      "values": [
+       7509,
+       9892,
+       9881,
+       17401,
+       21360,
+       44175
+      ]
+     },
+     {
+      "label": "Profit for the period/year (V-VI)",
+      "values": [
+       24149,
+       33521,
+       33028,
+       57670,
+       70609,
+       144454
+      ]
+     }
+    ],
+    "page": 1
+   }
+  ]
+ },
+ "lt": {
+  "statements": [
+   {
+    "basis": "consolidated",
+    "unit": "₹ Crore",
+    "columns": [
+     {
+      "period_end": "2026-09-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2026-06-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2025-09-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2026-09-30",
+      "period_type": "half_year"
+     },
+     {
+      "period_end": "2025-09-30",
+      "period_type": "half_year"
+     },
+     {
+      "period_end": "2026-03-31",
+      "period_type": "year"
+     }
+    ],
+    "rows": [
+     {
+      "label": "Revenue from operations",
+      "values": [
+       78749.94,
+       67941.74,
+       67983.53,
+       146691.68,
+       131662.45,
+       285874.36
+      ]
+     },
+     {
+      "label": "Other income (net)",
+      "values": [
+       2306.26,
+       2376.73,
+       1384.28,
+       4682.99,
+       2741.06,
+       5760.68
+      ]
+     },
+     {
+      "label": "Total Income",
+      "values": [
+       81056.2,
+       70318.47,
+       69367.81,
+       151374.67,
+       134403.51,
+       291635.04
+      ]
+     },
+     {
+      "label": "Finance costs",
+      "values": [
+       472.94,
+       538.67,
+       762.81,
+       1011.61,
+       1544.42,
+       2848.82
+      ]
+     },
+     {
+      "label": "Depreciation. amortisation. impairment and obsolescence",
+      "values": [
+       1036.91,
+       1032.28,
+       1091.77,
+       2069.19,
+       2125.07,
+       4364.75
+      ]
+     },
+     {
+      "label": "Profit before exceptional items and tax (1-2)",
+      "values": [
+       7641.06,
+       6922.26,
+       6336.11,
+       14563.32,
+       12195.64,
+       27698.25
+      ]
+     },
+     {
+      "label": "Exceptional items [loss]",
+      "values": [
+       null,
+       null,
+       null,
+       null,
+       null,
+       -1722.44
+      ]
+     },
+     {
+      "label": "Profit before tax (3+4)",
+      "values": [
+       7641.06,
+       6922.26,
+       6336.11,
+       14563.32,
+       12195.64,
+       25975.81
+      ]
+     },
+     {
+      "label": "Total tax expense",
+      "values": [
+       1725.91,
+       1939.41,
+       1649.02,
+       3665.32,
+       3182.98,
+       6816.41
+      ]
+     },
+     {
+      "label": "Net profit after tax (5-6)",
+      "values": [
+       5915.15,
+       4982.85,
+       4687.09,
+       10898.0,
+       9012.66,
+       19159.4
+      ]
+     },
+     {
+      "label": "Net profit after tax including share in profit/{loss) of joint ventures/associates (7+8)",
+      "values": [
+       5949.15,
+       4988.03,
+       4678.01,
+       10937.18,
+       8996.18,
+       18953.88
+      ]
+     },
+     {
+      "label": "Attributable to: Owners of the Company",
+      "values": [
+       5202.1,
+       4122.85,
+       3926.09,
+       9324.95,
+       7543.28,
+       16083.99
+      ]
+     }
+    ],
+    "page": 1
+   },
+   {
+    "basis": "standalone",
+    "unit": "₹ Crore",
+    "columns": [
+     {
+      "period_end": "2026-09-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2026-06-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2025-09-30",
+      "period_type": "quarter"
+     },
+     {
+      "period_end": "2026-09-30",
+      "period_type": "half_year"
+     },
+     {
+      "period_end": "2025-09-30",
+      "period_type": "half_year"
+     },
+     {
+      "period_end": "2026-03-31",
+      "period_type": "year"
+     }
+    ],
+    "rows": [
+     {
+      "label": "Revenue from operations",
+      "values": [
+       43583.58,
+       36024.07,
+       35115.74,
+       79607.65,
+       68586.47,
+       153680.17
+      ]
+     },
+     {
+      "label": "Other income(net)",
+      "values": [
+       2478.44,
+       4094.41,
+       1073.53,
+       6572.85,
+       3679.53,
+       7358.45
+      ]
+     },
+     {
+      "label": "Total Income",
+      "values": [
+       46062.02,
+       40118.48,
+       36189.27,
+       86180.5,
+       72266.0,
+       161038.62
+      ]
+     },
+     {
+      "label": "Finance costs",
+      "values": [
+       405.3,
+       352.37,
+       476.23,
+       757.67,
+       950.35,
+       1675.42
+      ]
+     },
+     {
+      "label": "Depreciation, amortisation, impairment and obsolescence",
+      "values": [
+       464.88,
+       476.59,
+       485.83,
+       941.47,
+       968.67,
+       1985.4
+      ]
+     },
+     {
+      "label": "Profit before exceptional items and tax (1-2)",
+      "values": [
+       3999.61,
+       5180.05,
+       2431.23,
+       9179.66,
+       6471.32,
+       16262.95
+      ]
+     },
+     {
+      "label": "Exceptional Items (loss)",
+      "values": [
+       null,
+       null,
+       -5413.0,
+       -5413.0,
+       -5413.0,
+       -7121.73
+      ]
+     },
+     {
+      "label": "Profll/(loss) before tax (3+4)",
+      "values": [
+       3999.61,
+       5180.05,
+       -2981.77,
+       9179.66,
+       1058.32,
+       9141.22
+      ]
+     },
+     {
+      "label": "Total tax expense",
+      "values": [
+       629.49,
+       724.79,
+       609.4,
+       1354.28,
+       1164.19,
+       2854.09
+      ]
+     },
+     {
+      "label": "Net profil/(loss} after tax (5-6)",
+      "values": [
+       3370.12,
+       4455.26,
+       -3591.17,
+       7825.38,
+       -105.87,
+       6287.13
+      ]
+     }
+    ],
+    "page": 3
+   }
+  ]
+ }
+}

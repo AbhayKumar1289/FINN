@@ -1,0 +1,20 @@
+[
+  {"nse": "RELIANCE",   "bse": "500325", "name": "Reliance Industries",        "legal_name": "Reliance Industries Limited",             "sector": "Energy & Conglomerate"},
+  {"nse": "NTPC",       "bse": "532555", "name": "NTPC",                       "legal_name": "NTPC Limited",                            "sector": "Power"},
+  {"nse": "HDFCBANK",   "bse": "500180", "name": "HDFC Bank",                  "legal_name": "HDFC Bank Limited",                       "sector": "Banking", "financial": true},
+  {"nse": "ICICIBANK",  "bse": "532174", "name": "ICICI Bank",                 "legal_name": "ICICI Bank Limited",                      "sector": "Banking", "financial": true},
+  {"nse": "BAJFINANCE", "bse": "500034", "name": "Bajaj Finance",              "legal_name": "Bajaj Finance Limited",                   "sector": "NBFC",    "financial": true},
+  {"nse": "TCS",        "bse": "532540", "name": "Tata Consultancy Services",  "legal_name": "Tata Consultancy Services Limited",       "sector": "IT Services"},
+  {"nse": "INFY",       "bse": "500209", "name": "Infosys",                    "legal_name": "Infosys Limited",                         "sector": "IT Services"},
+  {"nse": "MARUTI",     "bse": "532500", "name": "Maruti Suzuki India",        "legal_name": "Maruti Suzuki India Limited",             "sector": "Automobiles"},
+  {"nse": "M&M",        "bse": "500520", "name": "Mahindra & Mahindra",        "legal_name": "Mahindra & Mahindra Limited",             "sector": "Automobiles"},
+  {"nse": "SUNPHARMA",  "bse": "524715", "name": "Sun Pharmaceutical",         "legal_name": "Sun Pharmaceutical Industries Limited",   "sector": "Pharma"},
+  {"nse": "DRREDDY",    "bse": "500124", "name": "Dr. Reddy's Laboratories",   "legal_name": "Dr. Reddy's Laboratories Limited",        "sector": "Pharma"},
+  {"nse": "HINDUNILVR", "bse": "500696", "name": "Hindustan Unilever",         "legal_name": "Hindustan Unilever Limited",              "sector": "FMCG"},
+  {"nse": "ITC",        "bse": "500875", "name": "ITC",                        "legal_name": "ITC Limited",                             "sector": "FMCG"},
+  {"nse": "LT",         "bse": "500510", "name": "Larsen & Toubro",            "legal_name": "Larsen & Toubro Limited",                 "sector": "Infrastructure"},
+  {"nse": "ULTRACEMCO", "bse": "532538", "name": "UltraTech Cement",           "legal_name": "UltraTech Cement Limited",                "sector": "Cement"},
+  {"nse": "BHARTIARTL", "bse": "532454", "name": "Bharti Airtel",              "legal_name": "Bharti Airtel Limited",                   "sector": "Telecom"},
+  {"nse": "DIXON",      "bse": "540699", "name": "Dixon Technologies",         "legal_name": "Dixon Technologies (India) Limited",      "sector": "Electronics Mfg"},
+  {"nse": "POLYCAB",    "bse": "542652", "name": "Polycab India",              "legal_name": "Polycab India Limited",                   "sector": "Industrials"}
+]
