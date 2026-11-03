@@ -244,8 +244,8 @@ def digest(hours: float = Query(24, gt=0, le=MAX_WINDOW_HOURS),
            since: datetime | None = None, until: datetime | None = None,
            widen: bool = False, db: Session = Depends(get_db)):
     """Window is [since, until) if given (ISO 8601, offset-aware), else the last `hours`.
-    widen=true: if the last `hours` hold nothing, look back further (3, 7, then 30 days) and
-    say so, so a quiet day opens on the latest briefing rather than an empty screen."""
+    widen=true: if the last `hours` hold nothing above routine, start from the day of the latest
+    material filing and say so, so a quiet day opens on a briefing rather than an empty screen."""
     def to_utc(dt: datetime) -> datetime:
         if dt.tzinfo is None:
             raise HTTPException(400, "since/until need a UTC offset, e.g. 2026-10-27T09:00+05:30")
@@ -256,12 +256,13 @@ def digest(hours: float = Query(24, gt=0, le=MAX_WINDOW_HOURS),
     if not start < end or end - start > timedelta(hours=MAX_WINDOW_HOURS):
         raise HTTPException(400, f"window must be positive and at most {MAX_WINDOW_HOURS} hours")
     result = build_digest(db, start, end)
-    if widen and not since and result["counts"]["filings"] == 0:
-        # open on the latest briefing: the whole IST day of the most recent portfolio filing
+    if widen and not since and not (result["counts"].get("high") or result["counts"].get("medium")):
+        # routine paperwork alone isn't a briefing: open from the IST day of the most recent
+        # filing that needs attention, so a quiet stretch still starts on something worth reading
         latest = db.scalar(select(func.max(Announcement.published_at)).join(
             PortfolioCompany, PortfolioCompany.company_id == Announcement.company_id)
-            .where(Announcement.published_at < end))
-        if latest is not None and end - latest <= timedelta(hours=MAX_WINDOW_HOURS):
+            .where(Announcement.published_at < end, Announcement.priority.in_(("high", "medium"))))
+        if latest is not None and latest < start and end - latest <= timedelta(hours=MAX_WINDOW_HOURS):
             day = latest.replace(tzinfo=timezone.utc).astimezone(IST).date()
             day_start = datetime.combine(day, datetime.min.time(), IST).astimezone(timezone.utc).replace(tzinfo=None)
             result = build_digest(db, day_start, end)

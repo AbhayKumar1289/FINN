@@ -110,9 +110,9 @@ export default function Today() {
         {data && (
           <p className="brief-note num">
             {data.window.widened_from_hours && data.window.latest_day ? (
-              <>Quiet stretch: nothing new in the last {data.window.widened_from_hours >= 48
+              <>Quiet stretch: nothing that needs you in the last {data.window.widened_from_hours >= 48
                 ? `${Math.round(data.window.widened_from_hours / 24)} days` : `${data.window.widened_from_hours}h`}.
-                Showing the latest briefing, from {dayIST(data.window.latest_day + "T12:00:00+05:30")}.</>
+                Showing everything since {dayIST(data.window.latest_day + "T12:00:00+05:30")}, the latest material filing.</>
             ) : (
               <>{dayIST(data.window.start)}, {timeIST(data.window.start)} → now · {data.counts.filings} filing{data.counts.filings === 1 ? "" : "s"} in {data.counts.events} event{data.counts.events === 1 ? "" : "s"}
                 {data.span?.oldest && dayIST(data.span.oldest) !== dayIST(data.window.start) && ` · oldest ${dayIST(data.span.oldest)}`}
