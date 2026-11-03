@@ -66,7 +66,7 @@ screener.in ──┘   (+FTS5)    bios, guidance   └─ Portfolio
   quotes that can't be found in the transcript are dropped; Q&A cites excerpt ids and invalid ones
   are removed; segment-level guidance is never scored against group numbers.
 - **Cost.** Every LLM call is cached by content hash and logged (`/api/llm/usage`). Everything in
-  the demo, experiments included, cost about $0.10 over 86 calls at list prices (free tier in
+  the demo, experiments included, cost about $0.15 over 130 calls at list prices (free tier in
   practice): roughly $0.001 per results filing, $0.0006 per transcript, $0.002 per question.
 - **Honest data.** Prices are end-of-day, never "live"; a mid-session bar is not stored. A
   management bio not taken from the filing is labelled *Unverified*.
