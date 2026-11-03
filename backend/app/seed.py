@@ -21,7 +21,16 @@ DEFAULT_RULES = [
 ]
 
 
+# Benchmarks: stored like any company's prices (not in the portfolio), so "compare with NIFTY 50"
+# works offline and from the demo snapshot. meta.yahoo overrides the default "<SYMBOL>.NS".
+BENCHMARKS = [{"nse": "NIFTY50", "name": "NIFTY 50", "yahoo": "^NSEI"}]
+
+
 def seed(db: Session) -> None:
+    for b in BENCHMARKS:
+        if db.scalar(select(Company).where(Company.nse_symbol == b["nse"])) is None:
+            db.add(Company(nse_symbol=b["nse"], name=b["name"], sector="Index",
+                           meta={"index": True, "yahoo": b["yahoo"]}))
     for row in json.loads(SEED_FILE.read_text(encoding="utf-8")):
         company = db.scalar(select(Company).where(Company.nse_symbol == row["nse"]))
         if company is None:

@@ -16,7 +16,7 @@ SUBTYPE_BASE = {
     ("m_and_a", "subsidiary"): 40,
     ("credit_rating", "downgrade"): 80, ("credit_rating", "watch"): 60,
     ("credit_rating", "upgrade"): 60, ("credit_rating", "reaffirmed"): 20,
-    ("press_release", "order_win"): 55, ("press_release", "clarification"): 45,
+    ("press_release", "order_win"): 55, ("press_release", "regulatory_approval"): 60, ("press_release", "clarification"): 45,
     ("earnings_call", "transcript"): 40, ("earnings_call", "notice"): 20,
     ("fund_raise", "buyback"): 70, ("fund_raise", "intimation"): 45,
     ("dividend", "intimation"): 20, ("dividend", "record_date"): 20,
@@ -30,11 +30,29 @@ def bucket(score: float) -> str:
     return "high" if score >= HIGH else "medium" if score >= MEDIUM else "low"
 
 
+# Order size vs trailing-twelve-month revenue. L&T books orders every week; what matters is
+# whether one moves the needle.
+ORDER_LARGE_PCT, ORDER_SMALL_PCT = 5.0, 1.0
+
+
 def score_announcement(cls: Classification, reaction: dict | None,
-                       price_threshold: float, volume_threshold: float) -> tuple[float, list[str]]:
+                       price_threshold: float, volume_threshold: float,
+                       materiality: dict | None = None) -> tuple[float, list[str]]:
     base = SUBTYPE_BASE.get((cls.category, cls.subtype), CATEGORY_BASE.get(cls.category, 5))
-    score = float(base)
     reasons = [label(cls)]
+    pct = (materiality or {}).get("pct_of_revenue")
+    if pct is not None and cls.category in ("press_release", "m_and_a", "fund_raise", "capex"):
+        share = "<0.1%" if pct < 0.1 else f"{pct:.1f}%"
+        if pct >= ORDER_LARGE_PCT:
+            base = max(base, 75)
+            reasons.append(f"Large: {share} of annual revenue")
+        elif pct < ORDER_SMALL_PCT and (cls.subtype == "order_win" or cls.category == "m_and_a"):
+            # a ₹1 lakh CSR foundation is not M&A news, whatever the exchange calls it
+            base = min(base, 30 if cls.subtype == "order_win" else 20)
+            reasons.append(f"Immaterial: {share} of annual revenue")
+        else:
+            reasons.append(f"{share} of annual revenue")
+    score = float(base)
     if cls.details.get("role"):
         reasons.append(f"Role: {cls.details['role']}")
     if cls.details.get("also"):

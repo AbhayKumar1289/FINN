@@ -153,3 +153,68 @@ def test_prices_due_once_per_day_after_close(db):
     db.commit()
     assert not prices_due(db, evening)
     assert prices_due(db, datetime(2026, 10, 28, 17, 0, tzinfo=IST))
+
+
+def test_quiet_day_widens_the_window(db, feed_bytes, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    ingest(db, feed_bytes)
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    monkeypatch.setattr(main, "utcnow_naive", lambda: datetime(2026, 10, 30, 6, 0))  # three days later
+    try:
+        client = TestClient(main.app)
+        quiet = client.get("/api/digest?hours=24").json()
+        assert quiet["counts"]["filings"] == 0
+        widened = client.get("/api/digest?hours=24&widen=true").json()
+        assert widened["counts"]["filings"] > 0 and widened["window"]["widened_from_hours"] == 24
+        assert widened["window"]["latest_day"] == "2026-10-27"
+        assert widened["counts"]["filings"] == quiet_day_total(client)  # the whole day, not a slice
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def quiet_day_total(client):
+    return client.get("/api/digest?since=2026-10-27T00:00%2B05:30&until=2026-10-28T00:00%2B05:30").json()["counts"]["filings"]
+
+
+def test_done_on_a_card_clears_its_alert(db, feed_bytes):
+    from fastapi.testclient import TestClient
+    from app import main
+    ingest(db, feed_bytes)
+    evaluate_announcements(db, since=DAY_START)
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        client = TestClient(main.app)
+        hdfc = db.scalar(select(Announcement).join(Company).where(Company.nse_symbol == "HDFCBANK"))
+        before = {a.dedupe_key: a.seen for a in db.scalars(select(Alert))}
+        assert client.post(f"/api/announcements/{hdfc.id}/reviewed").status_code == 204
+        db.expire_all()
+        after = {a.dedupe_key: a.seen for a in db.scalars(select(Alert))}
+        changed = [k for k in after if after[k] != before[k]]
+        assert changed == ["ann:HDFCBANK:management_change:2026-10-27"]
+        d = client.get("/api/digest?since=2026-10-27T00:00%2B05:30&until=2026-10-28T00:00%2B05:30").json()
+        assert d["span"]["oldest"] < d["span"]["newest"] and "as_of" in d
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def test_chart_endpoint_pins_filings_and_benchmark(db, feed_bytes):
+    from fastapi.testclient import TestClient
+    from app import main
+    ingest(db, feed_bytes)
+    add_prices(db, "LT", [100 + i for i in range(60)], [1000] * 60, start=date(2026, 9, 1))
+    nifty = db.scalar(select(Company).where(Company.nse_symbol == "NIFTY50"))
+    for i in range(60):
+        db.add(DailyPrice(company_id=nifty.id, trading_date=date(2026, 9, 1) + timedelta(days=i),
+                          open=1, high=1, low=1, close=20000 + i, adj_close=20000 + i, volume=0))
+    db.commit()
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        d = TestClient(main.app).get("/api/companies/LT/chart?days=60").json()
+        assert len(d["rows"]) == 60 and len(d["benchmark"]["rows"]) == 60
+        results = next(e for e in d["events"] if "Results" in e["headline"])
+        assert results["date"] == "2026-10-28"   # filed 17:13 IST on 27 Oct: market reacts on the 28th
+        assert d["week52"]["high"] >= d["rows"][-1]["close"]
+        assert TestClient(main.app).get("/api/companies/NIFTY50/chart").status_code == 200
+    finally:
+        main.app.dependency_overrides.clear()

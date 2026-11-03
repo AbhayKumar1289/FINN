@@ -30,8 +30,9 @@ def fetch_pdf(db: Session, company_id: int, url: str, doc_type: str, title: str,
     r = httpx.get(url, headers={"User-Agent": settings.nse_user_agent}, timeout=120, follow_redirects=True)
     r.raise_for_status()
     data = r.content
-    if not data.startswith(b"%PDF"):
-        raise ValueError(f"not a PDF: {url}")
+    if not data.lstrip()[:5].startswith(b"%PDF"):
+        kind = r.headers.get("content-type", "unknown").split(";")[0]
+        raise ValueError(f"link returned {kind}, not a PDF (moved or expired on the company's site)")
     if len(data) > MAX_PDF_BYTES:
         raise ValueError(f"PDF too large ({len(data) // 1_000_000} MB)")
     digest = hashlib.sha256(data).hexdigest()

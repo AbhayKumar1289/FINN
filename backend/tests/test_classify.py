@@ -112,3 +112,18 @@ def test_priority_buckets_and_reaction_boost():
     assert score_announcement(esop, hot, 5, 2)[0] == 5
     _, reasons = score_announcement(results, {"status": "pending"}, 5, 2)
     assert "Market reaction pending (next session)" in reasons
+
+
+def test_regulator_approval_is_not_a_plain_press_release():
+    c = classify("Press Release", 'Sun Pharma has informed the Exchange regarding a press release titled '
+                 '"ILUMYA approved in the U.S. ... US FDA approval for the treatment of psoriatic arthritis"')
+    assert (c.category, c.subtype) == ("press_release", "regulatory_approval")
+    c = classify("Updates", "The Company has received approval from USFDA for its ANDA for a generic tablet")
+    assert c.subtype == "regulatory_approval"
+    assert classify("Updates", "USFDA issued a warning letter to the Halol facility").category == "litigation"
+    # Sun Pharma's real filing never says "FDA"
+    c = classify("Press Release", 'Sun Pharmaceutical Industries Limited has informed the Exchange regarding a press '
+                 'release dated October 30, 2026, titled "ILUMYA (tildrakizumab-asmn) approved in the U.S. for the '
+                 'Treatment of Adults with Active Psoriatic Arthritis".')
+    assert c.subtype == "regulatory_approval"
+    assert classify("Outcome of Board Meeting", "The Board approved in the meeting the appointment of auditors").subtype != "regulatory_approval"

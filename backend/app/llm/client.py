@@ -30,6 +30,14 @@ class LLMError(RuntimeError):
     pass
 
 
+class QuotaError(LLMError):
+    """Out of quota for this model (typically the free tier's daily cap): retrying won't help."""
+
+
+class UnavailableError(LLMError):
+    """The model kept answering 500/503 ("high demand") through every retry."""
+
+
 @dataclass
 class LLMResult:
     data: object            # parsed JSON when a schema was given, else text
@@ -39,6 +47,7 @@ class LLMResult:
     output_tokens: int = 0
     cost_usd: float = 0.0
     sources: list = field(default_factory=list)  # [{title, uri}] from search grounding
+    fallback: bool = False  # served by the cheap model because the strong one was out of quota
 
 
 def model_for(tier: str) -> str:
@@ -67,6 +76,17 @@ def _cache_key(model: str, system: str | None, parts: list, schema: dict | None,
     return h.hexdigest()
 
 
+def _retry_after(r: httpx.Response) -> float | None:
+    """Seconds Gemini asks us to wait (RetryInfo), or None when it gives no hint."""
+    try:
+        for d in r.json()["error"].get("details", []):
+            if d.get("@type", "").endswith("RetryInfo"):
+                return float(str(d.get("retryDelay", "")).rstrip("s") or 0)
+    except Exception:
+        pass
+    return None
+
+
 def _post(model: str, body: dict) -> dict:
     if not settings.gemini_api_key:
         raise LLMError("GEMINI_API_KEY is not set")
@@ -76,11 +96,20 @@ def _post(model: str, body: dict) -> dict:
                        headers={"x-goog-api-key": settings.gemini_api_key})
         if r.status_code == 200:
             return r.json()
-        if r.status_code in (429, 500, 503) and attempt < 3:
+        if r.status_code == 429:
+            wait = _retry_after(r)
+            if wait is not None and wait <= 20 and attempt < 3:  # per-minute limit: worth waiting
+                log.warning("gemini %s rate-limited; waiting %.0fs", model, wait)
+                time.sleep(wait + 1)
+                continue
+            raise QuotaError(f"gemini {model} quota exhausted: {r.text[:200]}")
+        if r.status_code in (500, 503) and attempt < 3:
             log.warning("gemini %s %s; retrying in %.0fs", model, r.status_code, delay)
             time.sleep(delay)
             delay *= 2
             continue
+        if r.status_code in (500, 503):
+            raise UnavailableError(f"gemini {model} {r.status_code}: {r.text[:300]}")
         raise LLMError(f"gemini {model} {r.status_code}: {r.text[:300]}")
     raise LLMError("unreachable")
 
@@ -89,8 +118,24 @@ def generate(db: Session, task: str, parts: list, *, tier: str = "cheap", system
              schema: dict | None = None, search: bool = False,
              thinking: str | None = None) -> LLMResult:
     """thinking="low" caps reasoning tokens for transcription-style tasks, where thinking is
-    pure cost (it was ~85% of the strong model's output tokens on results extraction)."""
-    model = model_for(tier)
+    pure cost (it was ~85% of the strong model's output tokens on results extraction).
+
+    If the strong model is out of quota or overloaded, degrade to the cheap one instead of
+    failing the feature: a slightly weaker answer beats an error card in a live demo."""
+    try:
+        return _generate(db, task, parts, model_for(tier), system, schema, search, thinking)
+    except (QuotaError, UnavailableError) as exc:
+        if tier != "strong":
+            raise
+        log.warning("strong model unusable for %s (%s); falling back to %s", task, type(exc).__name__,
+                    settings.model_cheap)
+        res = _generate(db, task, parts, settings.model_cheap, system, schema, search, thinking)
+        res.fallback = True
+        return res
+
+
+def _generate(db: Session, task: str, parts: list, model: str, system: str | None,
+              schema: dict | None, search: bool, thinking: str | None) -> LLMResult:
     key = _cache_key(model, f"{system}|thinking={thinking}", parts, schema, search)
     hit = db.scalar(select(LLMCall).where(LLMCall.cache_key == key))
     if hit is not None:

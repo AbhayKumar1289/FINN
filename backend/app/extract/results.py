@@ -216,10 +216,149 @@ def build_results(raw: dict, financial: bool) -> tuple[dict | None, list[str]]:
         "year_ago_period": fiscal_quarter(months_back(cur_d, 12)) if yoy else None,
         "basis": st.get("basis"), "unit_as_printed": st.get("unit"), "page": st.get("page"),
         "metrics": metrics, "margins": margins,
+        "bridge_yoy": None if financial or not yoy_q else profit_bridge(quarters[cur_d], yoy_q, unit),
         "ebitda_definition": None if financial else
         "PBT before exceptional items + finance costs + D&A - other income",
         "notes": ["EBITDA is not meaningful for banks/NBFCs"] if financial else [],
     }, issues
+
+
+def _parts(p: dict, unit: str) -> dict | None:
+    """Every line that turns EBITDA into PAT, in ₹ crore. PBT before exceptional items is
+    EBITDA - D&A - finance costs + other income by construction, so the bridge adds up."""
+    def cr(v):
+        return None if v is None else to_crore(v, unit)
+    ebitda, pbt = cr(_ebitda(p)), cr(p.get("profit_before_tax"))
+    pbt_pre = cr(p.get("profit_before_exceptional_items_and_tax"))
+    pat = cr(p.get("net_profit_attributable_to_owners") if p.get("net_profit_attributable_to_owners")
+             is not None else p.get("net_profit"))
+    if ebitda is None or pbt is None or pat is None:
+        return None
+    return {"ebitda": ebitda, "da": cr(p.get("depreciation_amortisation")) or 0.0,
+            "finance": cr(p.get("finance_costs")) or 0.0, "other_income": cr(p.get("other_income")) or 0.0,
+            "exceptional": (pbt - pbt_pre) if pbt_pre is not None else 0.0, "pbt": pbt, "pat": pat}
+
+
+def profit_bridge(cur: dict, base: dict, unit: str) -> dict | None:
+    """How the year-on-year change in PAT splits across the P&L, ₹ crore. Positive = helped profit."""
+    a, b = _parts(cur, unit), _parts(base, unit)
+    if a is None or b is None:
+        return None
+    d = {k: a[k] - b[k] for k in a}
+    return {k: round(v, 1) for k, v in {
+        "operating": d["ebitda"], "depreciation": -d["da"], "finance_costs": -d["finance"],
+        "other_income": d["other_income"], "exceptional": d["exceptional"],
+        "tax_and_minorities": d["pat"] - d["pbt"], "pat": d["pat"]}.items()}
+
+
+DRIVER_TEXT = {
+    "operating": ("operating profit rose ₹{v} cr", "operating profit fell ₹{v} cr"),
+    "depreciation": ("depreciation fell ₹{v} cr", "depreciation rose ₹{v} cr (new capacity)"),
+    "finance_costs": ("interest costs fell ₹{v} cr", "interest costs rose ₹{v} cr"),
+    "other_income": ("other income rose ₹{v} cr", "other income fell ₹{v} cr"),
+    "exceptional": ("a one-off gain of ₹{v} cr", "one-off (exceptional) charges of ₹{v} cr"),
+    "tax_and_minorities": ("a lower tax charge (₹{v} cr)", "a higher tax charge (₹{v} cr)"),
+}
+
+
+def _drivers(bridge: dict, direction: int, skip: tuple = ()) -> list[str]:
+    """The lines that moved profit in `direction` (+1 / -1), biggest first, ignoring noise."""
+    pat = abs(bridge["pat"]) or 1
+    items = [(k, v) for k, v in bridge.items() if k in DRIVER_TEXT and k not in skip
+             and v * direction > 0 and abs(v) >= 0.15 * pat]
+    items.sort(key=lambda kv: -abs(kv[1]))
+    return [DRIVER_TEXT[k][0 if v > 0 else 1].format(v=f"{abs(v):,.0f}") for k, v in items[:2]]
+
+
+def results_story(r: dict) -> dict:
+    """Editorial headline and callout title for the card, chosen by code from the numbers, so
+    'Profit fell. The business didn't.' is only ever said when operating profit actually held up."""
+    m = r["metrics"]
+    rev, ebitda, pat = (m[k]["yoy"]["value"] for k in ("revenue", "ebitda", "pat"))
+    note = m["pat"]["yoy"]["note"]
+    bridge = r.get("bridge_yoy") or {}
+    top = max(((k, v) for k, v in bridge.items() if k not in ("pat", "operating")),
+              key=lambda kv: abs(kv[1]), default=(None, 0))[0]
+    if note == "turned to a loss":
+        return {"headline": "Into the red.", "callout_title": "A profit last year, a loss this quarter."}
+    if note == "turned positive from a loss":
+        return {"headline": "Back in the black.", "callout_title": "A loss last year, a profit now."}
+    if rev is None or pat is None:
+        return {"headline": "Results are in.", "callout_title": "Year-ago comparison unavailable."}
+    if pat < 0 <= rev:
+        if ebitda is not None and ebitda >= 0:
+            title = {"exceptional": "A one-off charge did the damage.", "tax_and_minorities": "The taxman took more.",
+                     "other_income": "The difference is below the operating line.",
+                     "depreciation": "New capacity is still costing more than it earns.",
+                     "finance_costs": "Interest costs bit."}.get(top, "The difference is below the operating line.")
+            headline = {"other_income": "Operations up. Other income down.",
+                        "tax_and_minorities": "The business grew. The tax bill grew more.",
+                        "depreciation": "Growth is costing more to carry.",
+                        "finance_costs": "Interest ate the gains."}.get(top, "Profit fell. The business didn't.")
+            return {"headline": headline, "callout_title": title}
+        return {"headline": "Strong sales. Weaker bottom line.", "callout_title": "Costs outran sales."}
+    if rev >= 10 and pat >= 10:
+        return {"headline": "Growth on both lines.",
+                "callout_title": "Profit outpaced sales." if pat > rev else "Sales and profit in step."}
+    if pat >= 0 and rev < 0:
+        return {"headline": "Smaller, but more profitable.", "callout_title": "Margins did the work."}
+    if pat < 0 and rev < 0:
+        return {"headline": "A tough quarter.", "callout_title": "Sales and profit both fell."}
+    return {"headline": "A steady quarter.", "callout_title": "No big surprises in the P&L."}
+
+
+def results_explanation(r: dict, reaction: dict | None = None, guidance: list[dict] | None = None) -> str:
+    """Company-specific 'why it matters', composed by code from FINN's own numbers: where the
+    profit change came from, the guidance check, and how the market took it. No LLM."""
+    m = r["metrics"]
+    rev, ebitda, pat = (m[k]["yoy"]["value"] for k in ("revenue", "ebitda", "pat"))
+    bridge = r.get("bridge_yoy")
+    pp = r["margins"]["ebitda"]["change_pp"]
+    out = []
+    if rev is None or pat is None or not bridge:
+        out.append(results_verdict(r))
+    elif pat < 0 <= rev:
+        if ebitda is not None and ebitda >= 0:
+            drivers = _drivers(bridge, -1, skip=("operating",))
+            where = f": {' and '.join(drivers)}" if drivers else ""
+            one_off = " Largely one-off." if drivers and "one-off" in drivers[0] else ""
+            out.append(f"Sales +{rev:.0f}% and operating profit held up ({ebitda:+.0f}%), so the {abs(pat):.0f}% "
+                       f"profit drop came from below the operating line{where}.{one_off}")
+        else:
+            m_txt = f", margin {pp:+.1f}pp" if pp is not None else ""
+            out.append(f"Sales +{rev:.0f}% but operating profit {ebitda:+.0f}%{m_txt}: "
+                       f"costs are outrunning revenue.")
+    elif pat >= 0 and rev >= 0:
+        drivers = _drivers(bridge, +1)
+        lead = "Strong quarter" if rev >= 10 and pat >= 10 else "Steady quarter"
+        out.append(f"{lead}: sales {rev:+.0f}%, profit {pat:+.0f}%"
+                   + (f", helped by {' and '.join(drivers)}." if drivers else "."))
+    else:
+        drivers = _drivers(bridge, -1)
+        out.append(f"Sales {rev:+.0f}%, profit {pat:+.0f}%" + (f": {' and '.join(drivers)}." if drivers else "."))
+
+    fy = r["period"][-4:]  # "FY27"
+    for g in guidance or []:
+        if g.get("metric") == "revenue_growth" and g.get("target_period") == fy and g.get("actual") is not None \
+                and g.get("status") in ("on_track", "behind", "met", "missed", "exceeded"):
+            verb = {"on_track": "on track", "behind": "behind"}.get(g["status"], g["status"])
+            out.append(f"Revenue growth {g['actual']:.1f}% so far vs guided {g['target']} for {fy}: {verb}.")
+            break
+
+    if reaction and reaction.get("status") == "ok":
+        chg, rvol = reaction.get("change_pct"), reaction.get("relative_volume")
+        if chg is not None and (abs(chg) >= 2 or (rvol or 0) >= 2):
+            # describe the move, don't explain it: a price change has many causes besides this filing
+            against = pat is not None and (chg > 0) != (pat > 0)
+            when = reaction.get("session")
+            when = f"On {int(when[8:])} {_MONTHS[int(when[5:7]) - 1]}" if when else "In the first session after"
+            out.append(f"{when} the stock {'rose' if chg > 0 else 'fell'} {abs(chg):.1f}%"
+                       + (f" on {rvol:.1f}× usual volume" if rvol else "")
+                       + (f", despite profit {'falling' if pat < 0 else 'rising'}." if against else "."))
+    return " ".join(out)
+
+
+_MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
 
 def fmt_cr(v: float | None) -> str:

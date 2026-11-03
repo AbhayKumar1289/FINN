@@ -215,3 +215,93 @@ def test_unknown_person_gets_no_invented_bio(db, monkeypatch):
     out, _ = run_people(db, monkeypatch, [{"name": "Z", "role": "Director", "direction": "appointment"}],
                         bio={"known": False, "bio": None, "confidence": "low"})
     assert out["changes"][0]["background"]["bio"] is None
+
+
+# ---------- quota fallback ----------
+def test_strong_model_out_of_quota_falls_back_to_cheap(db, monkeypatch):
+    used = []
+
+    def post(model, body):
+        used.append(model)
+        if model == client.settings.model_strong:
+            raise client.QuotaError("quota exhausted")
+        return fake_response({"ok": 1})
+    monkeypatch.setattr(client.settings, "gemini_api_key", "test")
+    monkeypatch.setattr(client, "_post", post)
+    res = generate(db, "t", [{"text": "q"}], tier="strong", schema={"type": "object"})
+    assert res.data == {"ok": 1} and res.fallback and used == [client.settings.model_strong, client.settings.model_cheap]
+    with pytest.raises(client.QuotaError):  # the cheap tier has nothing to fall back to
+        monkeypatch.setattr(client, "_post", lambda m, b: (_ for _ in ()).throw(client.QuotaError("x")))
+        generate(db, "t2", [{"text": "uncached"}], tier="cheap", schema={"type": "object"})
+
+
+def test_strong_model_overloaded_falls_back_to_cheap(db, monkeypatch):
+    def post(model, body):
+        if model == client.settings.model_strong:
+            raise client.UnavailableError("503 high demand")
+        return fake_response({"ok": 2})
+    monkeypatch.setattr(client.settings, "gemini_api_key", "test")
+    monkeypatch.setattr(client, "_post", post)
+    res = generate(db, "t3", [{"text": "q"}], tier="strong", schema={"type": "object"})
+    assert res.data == {"ok": 2} and res.fallback
+
+
+# ---------- materiality ----------
+def test_order_size_decides_priority():
+    from app.pipeline.classify import Classification
+    from app.pipeline.priority import bucket, score_announcement
+    order = Classification("press_release", "order_win", "r")
+    subsidiary = Classification("m_and_a", "subsidiary", "r")
+    big = score_announcement(order, None, 5, 2, {"pct_of_revenue": 7.5})
+    small = score_announcement(order, None, 5, 2, {"pct_of_revenue": 0.4})
+    normal = score_announcement(order, None, 5, 2, {"pct_of_revenue": 1.7})
+    assert bucket(big[0]) == "high" and "Large: 7.5% of annual revenue" in big[1]
+    assert bucket(small[0]) == "low" and bucket(normal[0]) == "medium"
+    csr = score_announcement(subsidiary, None, 5, 2, {"pct_of_revenue": 0.0})  # ₹1 lakh foundation
+    assert bucket(csr[0]) == "low" and "Immaterial: <0.1% of annual revenue" in csr[1]
+    assert score_announcement(order, None, 5, 2, None)[0] == 55  # no number, no judgement
+
+
+def test_brief_converts_units_and_measures_against_ttm(db, monkeypatch):
+    from app.extract import brief as brief_mod
+    from app.models import FinancialMetric
+    c = db.scalar(select(Company).where(Company.nse_symbol == "LT"))
+    for q, fy in ((3, 26), (4, 26), (1, 27), (2, 27)):
+        db.add(FinancialMetric(company_id=c.id, metric="revenue", period=f"Q{q}FY{fy}", value_cr=75000, basis="consolidated"))
+    db.commit()
+    monkeypatch.setattr(brief_mod, "fetch_pdf", lambda *a, **k: (None, b"%PDF"))
+    monkeypatch.setattr(brief_mod, "page_texts", lambda data: ["p1", "p2"])
+    monkeypatch.setattr(brief_mod, "subset_pdf", lambda data, pages: b"%PDF")
+    monkeypatch.setattr(brief_mod, "generate", lambda *a, **k: LLMResult(
+        {"headline": "Metro systems order", "summary": "Won it.", "value_low": 5000, "value_high": 10000,
+         "value_unit": "crore", "key_points": ["a", "b", "c", "d"]}, "m", False))
+    out = brief_mod.extract_brief(db, make_ann(db, "LT", "press_release", "order_win"))
+    assert (out["value_low_cr"], out["value_high_cr"]) == (5000, 10000) and len(out["key_points"]) == 3
+    assert out["materiality"] == {"value_cr": 5000, "ttm_revenue_cr": 300000, "pct_of_revenue": 1.67}
+
+
+def test_enricher_routing_by_category_and_score(db):
+    from app.extract.enrich import needs_enrichment
+    assert needs_enrichment(make_ann(db, "LT", "m_and_a", "transaction"))          # wildcard subtype
+    assert needs_enrichment(make_ann(db, "TCS", "earnings_call", "transcript"))
+    assert not needs_enrichment(make_ann(db, "INFY", "earnings_call", "notice"))
+    low = make_ann(db, "ITC", "fund_raise", "raise")
+    low.priority_score = 20
+    assert not needs_enrichment(low)                                                # routine: no tokens
+    assert not needs_enrichment(make_ann(db, "NTPC", "capex", "capex", url="https://x.test/a.xml"))
+
+
+def test_story_headline_follows_the_numbers():
+    from app.extract.results import results_story
+    def r(rev, ebitda, pat, bridge):
+        ch = lambda v: {"value": v, "note": None}
+        return {"metrics": {"revenue": {"yoy": ch(rev)}, "ebitda": {"yoy": ch(ebitda)}, "pat": {"yoy": ch(pat)}},
+                "bridge_yoy": bridge}
+    sun = r(12, 5, -45, {"operating": 217, "exceptional": -1269, "tax_and_minorities": -1016, "other_income": 47, "pat": -2024})
+    assert results_story(sun) == {"headline": "Profit fell. The business didn't.",
+                                  "callout_title": "A one-off charge did the damage."}
+    dixon = r(47, 7, -49, {"operating": 37, "other_income": -427, "tax_and_minorities": 65, "pat": -326})
+    assert results_story(dixon)["headline"] == "Operations up. Other income down."
+    maruti = r(26, -6, -27, {"operating": -321, "other_income": -536, "pat": -888})
+    assert results_story(maruti)["headline"] == "Strong sales. Weaker bottom line."  # operating profit fell too
+    assert results_story(r(16, 1, 32, {"pat": 1276}))["headline"] == "Growth on both lines."

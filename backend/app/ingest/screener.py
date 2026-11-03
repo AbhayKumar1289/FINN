@@ -1,5 +1,6 @@
 """screener.in company page: links to primary documents (concall transcripts, annual reports)
-and its standardised quarterly P&L table.
+and its standardised quarterly P&L table, plus the annual statements (P&L, balance sheet,
+cash flow, ratios) behind the research view's snapshot, balance-sheet and cash-quality sections.
 
 Only /company/ pages are read, which robots.txt allows. The documents themselves are fetched
 from where screener links: company investor-relations sites and BSE's static file store. The
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.extract.results import fiscal_quarter
-from app.models import Company, FinancialDocument, FinancialMetric, IngestRun
+from app.models import Company, CompanyStatements, FinancialDocument, FinancialMetric, IngestRun
 
 log = logging.getLogger(__name__)
 
@@ -30,8 +31,10 @@ MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", 
                                       "sep", "oct", "nov", "dec"), start=1)}
 # screener row label -> FINN metric (banks use "Revenue" / "Financing Profit")
 ROW_METRICS = {"sales": "revenue", "revenue": "revenue", "operating profit": "operating_profit",
-               "financing profit": "operating_profit", "profit before tax": "pbt", "net profit": "pat"}
+               "financing profit": "operating_profit", "depreciation": "depreciation",
+               "profit before tax": "pbt", "net profit": "pat"}
 SOURCE = "screener.in quarterly table"
+STATEMENTS = ("profit-loss", "balance-sheet", "cash-flow", "ratios")
 
 
 @dataclass
@@ -40,6 +43,7 @@ class ScreenerPage:
     transcripts: list[dict]      # [{label, url, call_date}]
     annual_reports: list[dict]   # [{label, year, url}]
     quarters: dict               # {date: {metric: value_cr}}
+    statements: dict | None = None  # {section: {"periods": [...], "rows": {label: [...]}}}
 
 
 def month_label_to_date(label: str, end_of_month: bool = False) -> date | None:
@@ -58,6 +62,29 @@ def _num(text: str) -> float | None:
         return float(t)
     except ValueError:
         return None
+
+
+def row_label(cell) -> str:
+    """'Cash from Operating Activity+' -> 'cash from operating activity'; tooltips dropped."""
+    for tip in cell.select("span.tooltip, .tooltip, small"):
+        tip.decompose()
+    return re.sub(r"\s+", " ", cell.get_text(" ", strip=True)).rstrip("+ ").strip().lower()
+
+
+def parse_table(section) -> dict | None:
+    table = section.select_one("table") if section is not None else None
+    if table is None:
+        return None
+    periods = [th.get_text(strip=True) for th in table.select("thead th")][1:]
+    rows = {}
+    for tr in table.select("tbody tr"):
+        tds = tr.select("td")
+        if len(tds) < 2:
+            continue
+        label = row_label(tds[0])
+        if label and label not in rows and label != "raw pdf":
+            rows[label] = [_num(td.get_text(strip=True)) for td in tds[1:]]
+    return {"periods": periods, "rows": rows} if rows else None
 
 
 def parse_page(html: str, basis: str) -> ScreenerPage:
@@ -91,7 +118,8 @@ def parse_page(html: str, basis: str) -> ScreenerPage:
                 v = _num(raw)
                 if d is not None and v is not None:
                     quarters.setdefault(d, {})[metric] = v
-    return ScreenerPage(basis, transcripts, reports, quarters)
+    statements = {sid: t for sid in STATEMENTS if (t := parse_table(soup.select_one(f"section#{sid}")))}
+    return ScreenerPage(basis, transcripts, reports, quarters, statements or None)
 
 
 def fetch_page(symbol: str) -> ScreenerPage:
@@ -121,6 +149,11 @@ def sync_company(db: Session, company: Company, page: ScreenerPage | None = None
         for a in page.annual_reports:
             _upsert_doc(db, company, "annual_report", a["label"], a["url"], f"FY{a['year'] % 100:02d}",
                         date(a["year"], 3, 31))
+        if page.statements:
+            stmt = insert(CompanyStatements).values(company_id=company.id, basis=page.basis, tables=page.statements,
+                                                    fetched_at=datetime.now(timezone.utc).replace(tzinfo=None))
+            db.execute(stmt.on_conflict_do_update(index_elements=["company_id"], set_={
+                "basis": stmt.excluded.basis, "tables": stmt.excluded.tables, "fetched_at": stmt.excluded.fetched_at}))
         n_metrics = 0
         for d, values in page.quarters.items():
             if d.month not in (3, 6, 9, 12):

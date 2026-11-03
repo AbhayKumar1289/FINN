@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Announcement, Company, PortfolioCompany
+from app.extract.results import results_story
 from app.pipeline.present import CATEGORY_LABEL, SUBTYPE_LABEL
 
 
@@ -18,6 +19,10 @@ def iso_utc(dt: datetime | None) -> str | None:
 
 def _subtype(ann: Announcement) -> str | None:
     return ((ann.extracted or {}).get("classification") or {}).get("subtype")
+
+
+def _enriched(ann: Announcement) -> bool:
+    return ((ann.extracted or {}).get("enrichment") or {}).get("status") == "ok"
 
 
 def announcement_out(ann: Announcement, company: Company) -> dict:
@@ -36,7 +41,10 @@ def announcement_out(ann: Announcement, company: Company) -> dict:
         "reaction": (ann.extracted or {}).get("reaction"),
         # AI layer (chunk 3): present only for results filings / management changes
         "results": (ann.extracted or {}).get("results"),
+        "story": results_story(ann.extracted["results"]) if (ann.extracted or {}).get("results") else None,
         "people": (ann.extracted or {}).get("people"),
+        "brief": (ann.extracted or {}).get("brief"),
+        "transcript": (ann.extracted or {}).get("transcript"),
     }
 
 
@@ -51,10 +59,11 @@ def build_digest(db: Session, start: datetime, end: datetime) -> dict:
     for ann, company in rows:
         groups[(company.id, ann.category)].append((ann, company))
 
-    cards, routine = [], defaultdict(lambda: {"count": 0, "labels": set()})
+    cards, routine = [], defaultdict(lambda: {"count": 0, "labels": set(), "items": []})
     counts = {"high": 0, "medium": 0, "low": 0}
     for items in groups.values():
-        items.sort(key=lambda x: (-(x[0].priority_score or 0), x[0].published_at))
+        # lead with the highest score; among equals, the one FINN has read (has a brief/numbers)
+        items.sort(key=lambda x: (-(x[0].priority_score or 0), not _enriched(x[0]), x[0].published_at))
         lead, company = items[0]
         counts[lead.priority or "low"] += 1
         if lead.priority == "low":
@@ -63,6 +72,11 @@ def build_digest(db: Session, start: datetime, end: datetime) -> dict:
             r["count"] += len(items)
             r["labels"].update(SUBTYPE_LABEL.get((a.category, _subtype(a)), CATEGORY_LABEL.get(a.category))
                                for a, _ in items)
+            # each routine filing stays one tap away: what it is, when, and the source
+            r["items"] += [{"id": a.id, "label": SUBTYPE_LABEL.get((a.category, _subtype(a)), CATEGORY_LABEL.get(a.category)),
+                            "summary": a.summary, "published_at": iso_utc(a.published_at),
+                            "reasons": a.priority_reasons or [],
+                            "url": a.document_url or a.original_url} for a, _ in items]
             continue
         card = announcement_out(lead, company)
         card["related"] = [{"id": a.id, "label": SUBTYPE_LABEL.get((a.category, _subtype(a)), a.category),
@@ -74,7 +88,9 @@ def build_digest(db: Session, start: datetime, end: datetime) -> dict:
     cards.sort(key=lambda c: c["published_at"], reverse=True)
     cards.sort(key=lambda c: -(c["score"] or 0))
     routine_list = sorted(({"symbol": s, "name": v["name"], "count": v["count"],
-                            "labels": sorted(l for l in v["labels"] if l)} for s, v in routine.items()),
+                            "labels": sorted(l for l in v["labels"] if l),
+                            "items": sorted(v["items"], key=lambda i: i["published_at"], reverse=True)}
+                           for s, v in routine.items()),
                           key=lambda r: -r["count"])
     n_routine = sum(r["count"] for r in routine_list)
     return {
@@ -82,6 +98,8 @@ def build_digest(db: Session, start: datetime, end: datetime) -> dict:
                    "hours": round((end - start).total_seconds() / 3600, 1)},
         "generated_at": iso_utc(datetime.now(timezone.utc).replace(tzinfo=None)),
         "counts": {"filings": len(rows), "events": len(groups), **counts},
+        "span": {"oldest": iso_utc(min((a.published_at for a, _ in rows), default=None)),
+                 "newest": iso_utc(max((a.published_at for a, _ in rows), default=None))},
         "cards": cards,
         "routine": {"count": n_routine, "companies": routine_list,
                     "line": (f"{n_routine} routine filing{'s' if n_routine != 1 else ''} across "

@@ -49,6 +49,9 @@ CAPEX = _rx(r"capex|capital expenditure|capacity (expansion|addition|augmentatio
             r"|greenfield|brownfield")
 DIVIDEND = _rx(r"dividend")
 BONUS_SPLIT = _rx(r"\bbonus\b|stock split|split of|sub-?division")
+APPROVAL = _rx(r"\b(approv\w*|clearance|granted|authori[sz]ation)\b.{0,80}\b(us ?fda|usfda|fda|dcgi|cdsco|ema|mhra|"
+               r"health canada|tga|anvisa|pmda)\b|\b(us ?fda|usfda|fda|dcgi|ema)\b.{0,80}\b(approv\w*|clear\w*)"
+               r"|\bapprov\w*\s+(in|by)\s+(the\s+)?(u\.\s?s\.?|us|usa|united states|europe|eu|uk|japan|china|canada)\b")
 CLARIFICATION = _rx(r"clarification|spurt|news item|media report")
 POSTAL = _rx(r"postal ballot")
 INSIDER = _rx(r"insider trading|\bsast\b|substantial acquisition|regulation 7\s*\(2\)|prohibition of insider")
@@ -104,6 +107,7 @@ def _from_text(text: str, results_subtype: str, default: Classification,
     """First matching description signal wins; the rest are kept as `also`."""
     signals = [
         (RESULTS, lambda: Classification("results", results_subtype, f"{prefix}:results")),
+        (APPROVAL, lambda: Classification("press_release", "regulatory_approval", f"{prefix}:approval")),
         (ORDER_WIN, lambda: Classification("press_release", "order_win", f"{prefix}:order_win")),
         (SUBSIDIARY, lambda: Classification("m_and_a", "subsidiary", f"{prefix}:subsidiary")),
         (M_AND_A, lambda: Classification("m_and_a", "transaction", f"{prefix}:m_and_a")),

@@ -1,6 +1,6 @@
 """Threshold alerts. Each alert has a dedupe key, so re-running evaluation is always safe:
 one alert per stock per session per rule, and one per company per category per session."""
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.finance.calc import crosses
-from app.models import Alert, AlertRule, Announcement, Company, PortfolioCompany
+from app.models import Alert, AlertRule, Announcement, Company, IngestRun, PortfolioCompany
 from app.services.market import IST, price_rows, signals_for
 
 
@@ -45,6 +45,7 @@ def evaluate_market(db: Session, sessions: int = 1) -> int:
                     db, company_id=company.id, rule_id=price_rule.id,
                     dedupe_key=f"price_move:{company.nse_symbol}:{day}",
                     message=f"{company.nse_symbol} {change.value:+.1f}% on {day:%d %b} "
+                            f"{_volume_context(rvol)}{_filing_context(db, company.id, day)} "
                             f"(your threshold ±{price_rule.threshold:g}%)",
                     observed_value=round(change.value, 2), threshold_value=price_rule.threshold,
                     as_of=day, source_reference={"type": "eod", "trading_date": day.isoformat()})
@@ -53,11 +54,48 @@ def evaluate_market(db: Session, sessions: int = 1) -> int:
                     db, company_id=company.id, rule_id=vol_rule.id,
                     dedupe_key=f"volume_spike:{company.nse_symbol}:{day}",
                     message=f"{company.nse_symbol} volume {rvol:.1f}x its {lookback}-day average "
-                            f"on {day:%d %b} (your threshold {vol_rule.threshold:g}x)",
+                            f"on {day:%d %b}, {_price_context(change.value)}{_filing_context(db, company.id, day)} "
+                            f"(your threshold {vol_rule.threshold:g}x)",
                     observed_value=round(rvol, 2), threshold_value=vol_rule.threshold,
                     as_of=day, source_reference={"type": "eod", "trading_date": day.isoformat()})
     db.commit()
     return created
+
+
+def _volume_context(rvol: float | None) -> str:
+    if rvol is None:
+        return ""
+    if rvol >= 2:
+        return f"on heavy volume ({rvol:.1f}x usual)"
+    return "on ordinary volume" if rvol >= 0.8 else "on thin volume"
+
+
+def _price_context(chg: float | None) -> str:
+    """A volume spike reads differently with and without a price move."""
+    if chg is None:
+        return "price change unknown"
+    if abs(chg) < 1:
+        moved = "flat" if abs(chg) < 0.05 else f"{chg:+.1f}%"
+        return f"with the price barely moving ({moved}): heavy trading without a re-rating"
+    return f"with the stock {chg:+.1f}%"
+
+
+def _filing_context(db: Session, company_id: int, day) -> str:
+    """Name the filing that probably explains the move, if the company filed something material."""
+    start = datetime.combine(day - timedelta(days=1), time(15, 30), IST).astimezone(timezone.utc).replace(tzinfo=None)
+    end = datetime.combine(day, time(15, 30), IST).astimezone(timezone.utc).replace(tzinfo=None)
+    ann = db.scalar(select(Announcement).where(
+        Announcement.company_id == company_id, Announcement.published_at >= start,
+        Announcement.published_at < end, Announcement.priority.in_(("high", "medium")))
+        .order_by(Announcement.priority_score.desc()).limit(1))
+    if ann is None:
+        # only claim "no filing" for days FINN actually watched (history starts at first poll)
+        # the NSE feed holds about a day, so a poll soon after the close saw that session's filings
+        watched = db.scalar(select(IngestRun.id).where(
+            IngestRun.source == "announcements", IngestRun.status == "ok",
+            IngestRun.finished_at >= end, IngestRun.finished_at < end + timedelta(hours=20)).limit(1))
+        return ", no material filing that day" if watched else ""
+    return f", after: {(ann.extracted or {}).get('headline') or ann.category}"
 
 
 def matches_category(rule_categories: list[str], category: str | None, subtype: str | None) -> bool:

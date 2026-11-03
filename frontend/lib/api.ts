@@ -6,12 +6,21 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
+export async function api<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+      cache: "no-store",
+      signal: init?.signal ?? AbortSignal.timeout(init?.timeoutMs ?? 45_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new ApiError(504, "This is taking longer than usual. Please try again.");
+    }
+    throw e;
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -42,6 +51,7 @@ export type Results = {
   page: number | null;
   metrics: Record<"revenue" | "ebitda" | "pbt" | "pat", MetricBlock>;
   margins: Record<"ebitda" | "pat", { current_pct: number | null; year_ago_pct: number | null; change_pp: number | null }>;
+  bridge_yoy?: Record<"operating" | "depreciation" | "finance_costs" | "other_income" | "exceptional" | "tax_and_minorities" | "pat", number> | null;
   ebitda_definition: string | null;
   notes: string[];
   line: string;
@@ -85,18 +95,30 @@ export type Card = {
   reaction: Reaction | null;
   results: Results | null;
   people: { changes: PersonChange[]; line: string | null } | null;
+  brief: {
+    headline: string | null; summary: string | null; counterparty: string | null; key_points: string[];
+    value_low_cr: number | null; value_high_cr: number | null; value_note: string | null;
+    materiality?: { value_cr: number; ttm_revenue_cr: number; pct_of_revenue: number };
+  } | null;
+  transcript: { period: string; guidance_count: number } | null;
+  story: { headline: string; callout_title: string } | null;
   related: { id: number; label: string; summary: string | null; published_at: string; url: string | null }[];
 };
 
 export type Digest = {
-  window: { start: string; end: string; hours: number };
+  window: { start: string; end: string; hours: number; widened_from_hours?: number; latest_day?: string };
   generated_at: string;
   counts: { filings: number; events: number; high: number; medium: number; low: number };
+  span: { oldest: string | null; newest: string | null };
+  as_of?: { announcements: string | null; prices: string | null };
   cards: Card[];
   routine: {
     count: number;
     line: string | null;
-    companies: { symbol: string; name: string; count: number; labels: string[] }[];
+    companies: {
+      symbol: string; name: string; count: number; labels: string[];
+      items: { id: number; label: string; summary: string | null; published_at: string; reasons: string[]; url: string | null }[];
+    }[];
   };
 };
 
@@ -105,6 +127,8 @@ export type Alert = {
   symbol: string;
   name: string;
   rule: "price_move" | "volume_spike" | "announcement_category";
+  title: string;
+  detail: string | null;
   message: string;
   observed: number | null;
   threshold: number | null;
@@ -139,6 +163,8 @@ export type Holding = {
         volume_lookback: number;
       };
   spark?: number[];
+  latest_filing?: { id: number; headline: string; published_at: string; priority: string } | null;
+  unread_alerts?: number;
 };
 
 export type GuidanceRow = {
@@ -154,13 +180,23 @@ export type GuidanceRow = {
   status: "met" | "missed" | "exceeded" | "on_track" | "behind" | "pending" | "not_comparable";
   actual?: number;
   measured_over?: string;
+  measured_as?: string;
+  partial?: boolean;
+  gap?: number | null;
+  target_low?: number | null;
+  target_high?: number | null;
+  unit?: string | null;
+  /** a later restatement of the same promise points at the first one */
+  same_as?: number;
+  reiterated_in?: string[];
   reason?: string;
   source: { title: string; page: string | null; url: string };
 };
 
 export type Research = {
-  company: { symbol: string; name: string; sector: string | null; in_portfolio: boolean };
+  company: { symbol: string; name: string; sector: string | null; in_portfolio: boolean; is_financial?: boolean };
   status: "ready" | "preparing" | "not_started";
+  progress: { read: number; total: number; failed: number };
   documents: { title: string; type: string; period: string | null; status: string; url: string; error: string | null }[];
   financials: {
     basis: string | null;
@@ -168,7 +204,8 @@ export type Research = {
     quarters: { period: string; revenue?: number; operating_profit?: number; ebitda?: number; pat?: number; pbt?: number }[];
   };
   guidance: { rows: GuidanceRow[]; counts: Record<string, number>; calls: { period: string; title: string; url: string }[]; margin_definition: string };
-  narrative: { verdict: "delivers" | "mixed" | "over_promises" | "too_early"; summary: string; highlights: { row_ids: number[]; point: string }[] } | null;
+  statements: Statements | null;
+  narrative: { verdict: "delivers" | "mixed" | "over_promises" | "too_early" | "tracking"; verdict_capped?: boolean; summary: string; highlights: { row_ids: number[]; point: string }[] } | null;
 };
 
 export type Answer = {
@@ -177,3 +214,27 @@ export type Answer = {
   sources: { n: number; title: string; page: number | string | null; url: string | null; kind?: string; excerpt: string }[];
   cached: boolean;
 };
+
+type Series = (number | null)[];
+export type Statements = {
+  years: string[];
+  basis: string;
+  source: string;
+  snapshot: { label: string; value: number; unit: "cr" | "pct" | "x" }[];
+  trajectory: { revenue: Series; pat: Series; margin: Series | null; notes: string[];
+                cagr?: { revenue: number | null; pat: number | null; from: string; to: string } };
+  balance: { years: string[]; net_worth: Series; debt: Series; de?: Series; deposits?: Series;
+             wc_days?: Series; ccc?: Series; interest_cover?: number; notes: string[] };
+  cash: { years: string[]; cfo: number[]; pat: number[]; fcf: Series; conversion: Series; notes: string[];
+          applicable: boolean; cumulative?: { cfo: number; pat: number; ratio: number | null; from: string; to: string } };
+};
+
+export type Source = { n: number; title: string; page: number | string | null; url: string | null;
+                       kind: "excerpt" | "finn_fact"; excerpt: string };
+export type Business = {
+  summary: string;
+  segments: { name: string; share_pct: number | null; detail: string; ref: number }[];
+  facts: { text: string; ref: number }[];
+  sources: Source[];
+};
+export type Case = { bull: { point: string; refs: number[] }[]; bear: { point: string; refs: number[] }[]; sources: Source[] };

@@ -100,7 +100,7 @@ def series_fy26_fy27():
 
 
 def g(**kw):
-    base = dict(statement="x", guidance_type="explicit_numeric", target_unit="pct", scope="company",
+    base = dict(statement="our revenue growth guidance", guidance_type="explicit_numeric", target_unit="pct", scope="company",
                 metric="revenue_growth", target_low=15, target_high=None, target_period="FY26")
     return ManagementGuidance(**(base | kw))
 
@@ -120,6 +120,38 @@ def test_segment_margin_is_never_scored_against_group():
     assert m["status"] == "not_comparable" and "segment" in m["reason"]
     m = measure(g(metric="ebitda_margin", target_low=12.0), series_fy26_fy27())
     assert m["status"] == "exceeded" and m["actual"] == 12.5  # 56 / 447.2 company-level
+
+
+def test_targets_on_other_measures_are_not_scored_against_reported_revenue():
+    s = series_fy26_fy27()
+    for quote, why in [
+        ("revenue growth guidance is 1.5% to 3.5% in constant currency terms", "constant-currency"),
+        ("excluding the inorganic element, 6.5% to 7% is our organic revenue growth", "organic"),
+        ("we expect a low-single digit price growth in sales", "price or volume"),
+        ("we expect system credit growth of 12% to 13%, revenue to follow", "industry-wide"),
+        ("the company will keep growing at almost 15% to 17%", "doesn't say revenue"),
+    ]:
+        m = measure(g(statement=quote), s)
+        assert m["status"] == "not_comparable" and why in m["reason"], quote
+
+
+def test_operating_margin_means_ebit_when_depreciation_is_known():
+    s = series_fy26_fy27()
+    for q in s.values():
+        q["depreciation"] = 2.0
+    # FY26: (14 - 2) / 111.8 = 10.7% EBIT, vs 12.5% before depreciation
+    m = measure(g(metric="ebitda_margin", statement="Our operating margin guidance is 10% to 11%",
+                  target_low=10, target_high=11), s)
+    assert (m["status"], m["actual"]) == ("met", 10.7) and "EBIT" in m["measured_as"]
+    m = measure(g(metric="ebitda_margin", statement="EBITDA margin of 12%", target_low=12), s)
+    assert m["actual"] == 12.5
+    # without depreciation an EBIT target can't be measured honestly
+    m = measure(g(metric="ebitda_margin", statement="operating margin of 10%", target_low=10), series_fy26_fy27())
+    assert m["status"] == "not_comparable"
+    # an unlabelled restatement of the same range inherits the EBIT definition
+    m = measure(g(metric="ebitda_margin", statement="margin guidance maintained at 10-11%",
+                  target_low=10, target_high=11), s, frozenset({(10, 11)}))
+    assert m["actual"] == 10.7
 
 
 def test_qualitative_and_unmeasurable_guidance():
@@ -170,3 +202,14 @@ def test_ask_cites_only_real_excerpts_and_caches(db, monkeypatch):
     assert r["found"] and [s["n"] for s in r["sources"]] == [1]  # [7] doesn't exist: dropped
     again = qa_mod.ask(db, lt(db), "Order outlook?")
     assert again["cached"] and len(calls) == 1
+
+
+def test_verdict_cannot_overstate_partial_evidence(db, monkeypatch):
+    from app.research import delivery
+    monkeypatch.setattr(delivery, "generate", lambda *a, **k: LLMResult(
+        {"verdict": "delivers", "summary": "Great.", "highlights": []}, "m", False))
+    table = {"rows": [{"id": 1, "status": "on_track", "quote": "q"}]}
+    out = delivery.guidance_narrative(db, "X", table)
+    assert out["verdict"] == "tracking" and out["verdict_capped"]
+    table = {"rows": [{"id": 1, "status": "met", "quote": "q"}]}
+    assert delivery.guidance_narrative(db, "X", table)["verdict"] == "delivers"

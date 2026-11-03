@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
+
+function friendly(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  return "Can't reach FINN's server. It may be waking up (this takes up to a minute); retrying…";
+}
 
 /** Minimal fetch hook: data, error, loading, reload. Keeps the last data while reloading. */
 export function useApi<T>(path: string | null, pollMs?: number) {
@@ -12,16 +17,23 @@ export function useApi<T>(path: string | null, pollMs?: number) {
   useEffect(() => {
     if (!path) return;
     let alive = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     const run = () =>
       api<T>(path).then(
         (d) => { if (alive) { setData(d); setError(null); } },
-        (e) => { if (alive) setError(e instanceof Error ? e.message : String(e)); },
+        (e) => {
+          if (!alive) return;
+          setError(friendly(e));
+          // the server may be waking up (free hosting sleeps when idle): try again soon
+          if (!(e instanceof ApiError) || e.status >= 500) retry = setTimeout(run, 8000);
+        },
       );
     run();
     const timer = pollMs ? setInterval(run, pollMs) : undefined;
     return () => {
       alive = false;
       if (timer) clearInterval(timer);
+      if (retry) clearTimeout(retry);
     };
   }, [path, pollMs, tick]);
 

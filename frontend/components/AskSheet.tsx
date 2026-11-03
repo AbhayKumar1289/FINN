@@ -15,16 +15,17 @@ const SUGGESTIONS: Record<string, string[]> = {
 };
 
 /** Pull, opened from Push: a research thread already scoped to the event on the card. */
-export default function AskSheet({ symbol, name, announcementId, category, onClose }: {
+export default function AskSheet({ symbol, name, announcementId, category, initialQuestion, onClose }: {
   symbol: string;
   name: string;
   announcementId?: number;
   category?: string;
+  initialQuestion?: string;   // e.g. a saved follow-up: pre-filled, the investor taps Ask
   onClose: () => void;
 }) {
   const [status, setStatus] = useState<Research["status"] | "checking">("checking");
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuestion ?? "");
   const [busy, setBusy] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const suggestions = SUGGESTIONS[category ?? ""] ?? SUGGESTIONS.default;

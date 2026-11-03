@@ -115,6 +115,17 @@ class FinancialMetric(Base):
     source_location: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class CompanyStatements(Base):
+    """Annual P&L, balance sheet, cash flow and ratios as compiled by screener.in from the annual
+    filings: {"profit-loss": {"periods": [...], "rows": {label: [value | None]}}, ...}, ₹ crore."""
+    __tablename__ = "company_statements"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), unique=True)
+    basis: Mapped[str] = mapped_column(String(16))
+    tables: Mapped[dict] = mapped_column(JSON)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
 class ManagementGuidance(Base):
     __tablename__ = "management_guidance"
     id: Mapped[int] = mapped_column(primary_key=True)

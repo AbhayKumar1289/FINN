@@ -13,6 +13,23 @@ from app.models import FinancialDocument, FinancialMetric, ManagementGuidance
 
 COMPARABLE = {"revenue_growth", "pat_growth", "ebitda_margin"}
 
+# FINN measures reported, all-in rupee growth. A target stated on another measure is a different
+# number; scoring it against reported revenue would manufacture a verdict.
+OTHER_MEASURE = [
+    (re.compile(r"constant[- ]currency|\bcc\b", re.I), "constant-currency target; FINN measures reported rupee revenue"),
+    (re.compile(r"organic", re.I), "organic growth; reported revenue includes acquisitions"),
+    (re.compile(r"price growth|volume growth|\bu[vs]g\b|underlying (?:volume|sales)", re.I),
+     "a price or volume component, not total revenue"),
+    (re.compile(r"system growth|credit growth|industry growth|market growth|\bGDP\b", re.I),
+     "an industry-wide figure, not the company's own"),
+]
+# a growth target is scored only when the quote names the line; "we'll grow 15%" could be volume.
+# Consumer companies say "value growth" for sales, as against volume growth.
+NAMES_LINE = {"revenue_growth": re.compile(r"revenue|sales|top[- ]?line|turnover|income|value growth", re.I),
+              "pat_growth": re.compile(r"profit|PAT|earnings|bottom[- ]?line", re.I)}
+# Indian IT and others quote "operating margin" after depreciation (EBIT); EBITDA is before it
+EBIT = re.compile(r"\bEBIT\b(?!DA)|operating margin", re.I)
+
 NARRATIVE_SCHEMA = {"type": "object", "properties": {
     "verdict": {"type": "string", "enum": ["delivers", "mixed", "over_promises", "too_early"]},
     "summary": {"type": "string", "description": "3-5 sentences"},
@@ -71,7 +88,11 @@ def _margin_metric(series: dict) -> str:
     return "operating_profit" if have["operating_profit"] >= have["ebitda"] else "ebitda"
 
 
-def measure(g: ManagementGuidance, series: dict) -> dict:
+def _is_ebit(statement: str) -> bool:
+    return bool(EBIT.search(statement)) and not re.search(r"EBITDA", statement, re.I)
+
+
+def measure(g: ManagementGuidance, series: dict, ebit_ranges: frozenset = frozenset()) -> dict:
     """Actual for the guided metric over the guided period (or the reported part of it)."""
     if g.metric not in COMPARABLE:
         return {"status": "not_comparable", "reason": "not a reported P&L line; judge from later calls"}
@@ -82,6 +103,14 @@ def measure(g: ManagementGuidance, series: dict) -> dict:
                                                       "FINN scores company-level targets only"}
     if g.guidance_type != "explicit_numeric" or g.target_low is None or g.target_unit != "pct":
         return {"status": "not_comparable", "reason": "no numeric target"}
+    if g.metric in NAMES_LINE and not NAMES_LINE[g.metric].search(g.statement):
+        return {"status": "not_comparable",
+                "reason": f"the quote doesn't say {'revenue' if g.metric == 'revenue_growth' else 'profit'} "
+                          "is what grows; FINN won't guess"}
+    if g.metric in ("revenue_growth", "pat_growth"):
+        for rx, reason in OTHER_MEASURE:
+            if rx.search(g.statement):
+                return {"status": "not_comparable", "reason": reason}
     target = _quarters_for(g.target_period)
     if not target:
         return {"status": "not_comparable", "reason": "no specific period"}
@@ -92,9 +121,20 @@ def measure(g: ManagementGuidance, series: dict) -> dict:
     if partial and reported != target[:len(reported)]:
         return {"status": "not_comparable", "reason": "gaps in reported quarters"}
     prior = [(fy - 1, q) for fy, q in reported]
+    measured_as = None
     if g.metric == "ebitda_margin":
         m = _margin_metric(series)
-        actual = margin(_sum(series, reported, m), _sum(series, reported, "revenue"))
+        profit = _sum(series, reported, m)
+        # "margin guidance is maintained at 20-22%" inherits the definition used for that range elsewhere
+        if _is_ebit(g.statement) or (g.target_low, g.target_high) in ebit_ranges:
+            dep = _sum(series, reported, "depreciation")
+            if profit is None or dep is None or m != "operating_profit":
+                return {"status": "not_comparable",
+                        "reason": "EBIT (after-depreciation) target; depreciation not available to measure it"}
+            profit, measured_as = profit - dep, "EBIT margin: operating profit less depreciation, over revenue"
+        else:
+            measured_as = "operating profit over revenue" if m == "operating_profit" else "EBITDA over revenue"
+        actual = margin(profit, _sum(series, reported, "revenue"))
     else:
         metric = "revenue" if g.metric == "revenue_growth" else "pat"
         actual = pct_change(_sum(series, reported, metric), _sum(series, prior, metric)).value
@@ -110,7 +150,7 @@ def measure(g: ManagementGuidance, series: dict) -> dict:
     if partial:
         status = "on_track" if status in ("met", "exceeded") else "behind"
     return {"status": status, "actual": round(actual, 1), "gap": cmp["gap"], "measured_over": span,
-            "partial": partial}
+            "partial": partial, **({"measured_as": measured_as} if measured_as else {})}
 
 
 def guidance_table(db: Session, company_id: int, last_n_calls: int = 4) -> dict:
@@ -122,6 +162,8 @@ def guidance_table(db: Session, company_id: int, last_n_calls: int = 4) -> dict:
     by_doc = {d.id: d for d in docs}
     rows = db.scalars(select(ManagementGuidance).where(ManagementGuidance.source_document_id.in_(by_doc))
                       .order_by(ManagementGuidance.id)).all()
+    ebit_ranges = frozenset((g.target_low, g.target_high) for g in rows
+                            if g.metric == "ebitda_margin" and _is_ebit(g.statement))
     out = []
     for i, g in enumerate(rows, start=1):
         doc = by_doc[g.source_document_id]
@@ -130,14 +172,29 @@ def guidance_table(db: Session, company_id: int, last_n_calls: int = 4) -> dict:
             unit = {"pct": "%", "cr": " cr", "pp": "pp"}.get(g.target_unit, "")
             target = (f"{g.target_low:g}{unit}" if g.target_high in (None, g.target_low)
                       else f"{g.target_low:g}-{g.target_high:g}{unit}")
-            if g.target_high is None and "double" in g.statement.lower():
+            if g.target_high is None and re.search(r"double|over|above|at least|more than|upwards of|in excess",
+                                                   g.statement, re.I):
                 target = f"≥{g.target_low:g}{unit}"
         out.append({"id": i, "stated_in": g.stated_in_period, "quote": g.statement, "metric": g.metric,
                     "type": g.guidance_type, "target": target, "target_period": g.target_period,
+                    "target_low": g.target_low, "target_high": g.target_high, "unit": g.target_unit,
                     "scope": g.scope, "segment": g.segment,
-                    **measure(g, series),
+                    **measure(g, series, ebit_ranges),
                     "source": {"title": doc.title, "page": g.source_location, "url": doc.source_url}})
-    counts = Counter(r["status"] for r in out)
+    # the same promise restated on a later call is one promise (reiterated), not two misses
+    first: dict = {}
+    for r in sorted(out, key=lambda r: (_q(r["stated_in"] or "") or (0, 0), r["id"])):
+        if r["target"] is None:
+            continue
+        k = (r["metric"], r["target"], r["target_period"], r["scope"], r["segment"])
+        if k not in first:
+            first[k] = r
+            continue
+        r["same_as"] = first[k]["id"]
+        again = first[k].setdefault("reiterated_in", [])
+        if r["stated_in"] != first[k]["stated_in"] and r["stated_in"] not in again:
+            again.append(r["stated_in"])
+    counts = Counter(r["status"] for r in out if "same_as" not in r)
     return {"basis": basis, "calls": [{"period": d.period, "title": d.title, "url": d.source_url} for d in docs],
             "rows": out, "counts": dict(counts),
             "margin_definition": "operating profit / revenue (screener.in) where available, else FINN EBITDA"}
@@ -151,4 +208,11 @@ def guidance_narrative(db: Session, company_name: str, table: dict) -> dict | No
     res = generate(db, "guidance_narrative",
                    [{"text": f"Company: {company_name}\nRows:\n" + "\n".join(map(str, rows))}],
                    tier="strong", system=NARRATIVE_SYSTEM, schema=NARRATIVE_SCHEMA, thinking="low")
-    return {**res.data, "model": res.model}
+    out = {**res.data, "model": res.model}
+    # The model may not overstate the evidence: a verdict on delivery needs at least one
+    # guided period that has fully reported. Half a year "on track" is not "delivers".
+    statuses = {r["status"] for r in table["rows"]}
+    if not statuses & {"met", "missed", "exceeded"} and out["verdict"] in ("delivers", "over_promises"):
+        out["verdict"] = "tracking" if statuses & {"on_track", "behind"} else "too_early"
+        out["verdict_capped"] = True
+    return out

@@ -75,11 +75,12 @@ def refresh_prices(db: Session, companies: list[Company] | None = None,
                    period: str | None = None) -> dict:
     if companies is None:
         companies = list(db.scalars(select(Company).join(PortfolioCompany)))
+        companies += [c for c in db.scalars(select(Company)) if (c.meta or {}).get("index")]
     run = IngestRun(source="prices")
     db.add(run)
     db.commit()
 
-    by_symbol = {yahoo_symbol(c.nse_symbol): c for c in companies}
+    by_symbol = {(c.meta or {}).get("yahoo") or yahoo_symbol(c.nse_symbol): c for c in companies}
     detail = {"ok": [], "missing": [], "rows": 0}
     try:
         df = yf.download(list(by_symbol), period=period or settings.price_history_period,

@@ -7,6 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AlertRule, Announcement
+from app.extract.results import results_explanation
 from app.pipeline.classify import Classification, classify
 from app.pipeline.present import clean_summary, headline, why_it_matters
 from app.pipeline.priority import bucket, score_announcement
@@ -25,6 +26,14 @@ def thresholds(db: Session) -> tuple[float, float]:
             vol.threshold if vol and vol.threshold else 2.0)
 
 
+def _guidance_rows(db: Session, company_id: int, cache: dict) -> list[dict]:
+    """Scored guidance for the company, if research has been prepared for it."""
+    if company_id not in cache:
+        from app.research.delivery import guidance_table  # research layer is optional here
+        cache[company_id] = guidance_table(db, company_id)["rows"]
+    return cache[company_id]
+
+
 def _classification(ann: Announcement) -> Classification:
     c = (ann.extracted or {}).get("classification") or {}
     return Classification(ann.category or "unclassified", c.get("subtype"), c.get("rule", ""),
@@ -40,6 +49,7 @@ def process_announcements(db: Session, ids: list[int] | None = None,
     if since is not None:
         conds.append(Announcement.published_at >= since)
     price_t, vol_t = thresholds(db)
+    cache: dict = {}
     n = 0
     for ann in db.scalars(select(Announcement).where(or_(*conds))).all():
         try:
@@ -56,8 +66,12 @@ def process_announcements(db: Session, ids: list[int] | None = None,
             else:
                 cls = _classification(ann)
             reaction = market_reaction(db, ann.company_id, ann.published_at)
-            score, reasons = score_announcement(cls, reaction, price_t, vol_t)
+            score, reasons = score_announcement(cls, reaction, price_t, vol_t,
+                                                (ann.extracted or {}).get("materiality"))
             ann.extracted = {**(ann.extracted or {}), "reaction": reaction}
+            if (ann.extracted or {}).get("results"):
+                ann.why_it_matters = results_explanation(ann.extracted["results"], reaction,
+                                                         _guidance_rows(db, ann.company_id, cache))
             ann.priority_score = score
             ann.priority = bucket(score)
             ann.priority_reasons = reasons
